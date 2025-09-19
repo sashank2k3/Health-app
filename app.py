@@ -559,22 +559,6 @@ def get_vegetarian_food_recommendations():
 
 # Main app
 def main():
-    # Mobile detection and optimization
-    st.markdown("""
-    <script>
-    // Mobile detection and optimization
-    function detectMobile() {
-        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-        if (isMobile) {
-            document.body.classList.add('mobile-device');
-            // Optimize for mobile
-            document.querySelector('.main').style.padding = '0.5rem';
-        }
-    }
-    detectMobile();
-    </script>
-    """, unsafe_allow_html=True)
-    
     # Mobile-optimized header
     st.markdown("""
     <div style="text-align: center; padding: 1rem 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
