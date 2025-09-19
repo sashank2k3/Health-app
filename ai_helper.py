@@ -11,6 +11,43 @@ class HealthAI:
         self.huggingface_token = st.secrets.get("HUGGINGFACE_TOKEN", os.environ.get("HUGGINGFACE_TOKEN"))
         self.openai_key = st.secrets.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
         self.groq_key = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY"))
+        # Use a reliably available free model
+        self.hf_model = os.environ.get("HF_MODEL", st.secrets.get("HF_MODEL", "google/flan-t5-base"))
+
+    def _hf_generate(self, prompt: str, max_new_tokens: int = 200, temperature: float = 0.7) -> str:
+        if not self.huggingface_token:
+            return "AI not configured. Add HUGGINGFACE_TOKEN to secrets."
+        headers = {
+            "Authorization": f"Bearer {self.huggingface_token}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "inputs": prompt,
+            "parameters": {
+                "max_new_tokens": max_new_tokens,
+                "temperature": temperature,
+            },
+            "options": {"wait_for_model": True}
+        }
+        url = f"https://api-inference.huggingface.co/models/{self.hf_model}"
+        try:
+            resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
+            if resp.status_code == 200:
+                data = resp.json()
+                # flan-t5 returns a list of dicts with 'generated_text'
+                if isinstance(data, list) and data:
+                    return data[0].get("generated_text", "") or "(empty response)"
+                # some models return dict with 'generated_text'
+                if isinstance(data, dict) and "generated_text" in data:
+                    return data["generated_text"]
+                return "(no text returned)"
+            if resp.status_code in (503, 524):
+                return "Model is loading. Please try again in a few seconds."
+            if resp.status_code == 404:
+                return f"Model not found or gated: {self.hf_model}. Try setting HF_MODEL to a public model like 'google/flan-t5-base'."
+            return f"AI service error: {resp.status_code}"
+        except Exception as e:
+            return f"AI request failed: {e}"
     
     def get_health_insights(self, user_data: Dict[str, Any]) -> str:
         """Get personalized health insights using Hugging Face"""
@@ -30,30 +67,12 @@ class HealthAI:
             - Daily Calories: {user_data.get('daily_calories', 'N/A')}
             - Workout Time: {user_data.get('workout_time', 'N/A')} minutes
             """
-            
-            # Use Hugging Face Inference API
-            headers = {"Authorization": f"Bearer {self.huggingface_token}"}
-            payload = {
-                "inputs": f"Analyze this health data and provide personalized insights: {data_summary}",
-                "parameters": {"max_length": 200, "temperature": 0.7}
-            }
-            
-            response = requests.post(
-                "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium",
-                headers=headers,
-                json=payload
+            prompt = (
+                "You are a helpful health assistant. Based on the following data, "
+                "provide concise, practical insights (3-5 bullet points) covering calories, macros, "
+                "activity, and a simple next step.\n\n" + data_summary
             )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if isinstance(result, list) and len(result) > 0:
-                    return result[0].get('generated_text', 'AI analysis completed.')
-                return "Health insights generated successfully."
-            else:
-                return f"AI service temporarily unavailable. Status: {response.status_code}"
-                
-        except Exception as e:
-            return f"AI analysis error: {str(e)}"
+            return self._hf_generate(prompt, max_new_tokens=220, temperature=0.6)
     
     def get_meal_recommendations(self, user_profile: Dict[str, Any], meal_type: str) -> str:
         """Get AI-powered meal recommendations"""
@@ -67,29 +86,7 @@ class HealthAI:
             Weight: {user_profile.get('weight', 'N/A')} kg, Height: {user_profile.get('height', 'N/A')} cm.
             Focus on vegetarian options with balanced nutrition.
             """
-            
-            headers = {"Authorization": f"Bearer {self.huggingface_token}"}
-            payload = {
-                "inputs": prompt,
-                "parameters": {"max_length": 150, "temperature": 0.8}
-            }
-            
-            response = requests.post(
-                "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium",
-                headers=headers,
-                json=payload
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if isinstance(result, list) and len(result) > 0:
-                    return result[0].get('generated_text', 'Meal recommendations generated.')
-                return "AI meal recommendations ready."
-            else:
-                return f"AI service unavailable. Status: {response.status_code}"
-                
-        except Exception as e:
-            return f"AI recommendation error: {str(e)}"
+            return self._hf_generate(prompt, max_new_tokens=160, temperature=0.8)
     
     def get_workout_suggestions(self, user_profile: Dict[str, Any], available_time: int) -> str:
         """Get AI-powered workout suggestions"""
@@ -103,29 +100,7 @@ class HealthAI:
             Weight: {user_profile.get('weight', 'N/A')} kg, Height: {user_profile.get('height', 'N/A')} cm.
             Include exercises that can be done at home or gym.
             """
-            
-            headers = {"Authorization": f"Bearer {self.huggingface_token}"}
-            payload = {
-                "inputs": prompt,
-                "parameters": {"max_length": 200, "temperature": 0.7}
-            }
-            
-            response = requests.post(
-                "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium",
-                headers=headers,
-                json=payload
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if isinstance(result, list) and len(result) > 0:
-                    return result[0].get('generated_text', 'Workout suggestions generated.')
-                return "AI workout suggestions ready."
-            else:
-                return f"AI service unavailable. Status: {response.status_code}"
-                
-        except Exception as e:
-            return f"AI workout error: {str(e)}"
+            return self._hf_generate(prompt, max_new_tokens=200, temperature=0.7)
     
     def analyze_progress(self, weight_history: List[Dict], diet_history: List[Dict], workout_history: List[Dict]) -> str:
         """Analyze user's health progress using AI"""
@@ -142,29 +117,11 @@ class HealthAI:
             - Recent weight trend: {'Improving' if len(weight_history) > 1 else 'Starting journey'}
             - Activity consistency: {'Good' if len(workout_history) > 3 else 'Needs improvement'}
             """
-            
-            headers = {"Authorization": f"Bearer {self.huggingface_token}"}
-            payload = {
-                "inputs": f"Analyze this health progress data and provide motivational insights: {progress_summary}",
-                "parameters": {"max_length": 250, "temperature": 0.8}
-            }
-            
-            response = requests.post(
-                "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium",
-                headers=headers,
-                json=payload
+            prompt = (
+                "Summarize this health progress in 3-5 encouraging bullet points and one next action: "
+                + progress_summary
             )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if isinstance(result, list) and len(result) > 0:
-                    return result[0].get('generated_text', 'Progress analysis completed.')
-                return "AI progress analysis ready."
-            else:
-                return f"AI service unavailable. Status: {response.status_code}"
-                
-        except Exception as e:
-            return f"AI analysis error: {str(e)}"
+            return self._hf_generate(prompt, max_new_tokens=240, temperature=0.75)
     
     def get_motivational_message(self, user_goals: str, recent_activity: str) -> str:
         """Get AI-powered motivational messages"""
@@ -177,29 +134,7 @@ class HealthAI:
             Recent activity: {recent_activity}
             Make it encouraging and specific to their health journey.
             """
-            
-            headers = {"Authorization": f"Bearer {self.huggingface_token}"}
-            payload = {
-                "inputs": prompt,
-                "parameters": {"max_length": 100, "temperature": 0.9}
-            }
-            
-            response = requests.post(
-                "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium",
-                headers=headers,
-                json=payload
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                if isinstance(result, list) and len(result) > 0:
-                    return result[0].get('generated_text', 'Motivational message generated.')
-                return "AI motivation ready."
-            else:
-                return f"AI service unavailable. Status: {response.status_code}"
-                
-        except Exception as e:
-            return f"AI motivation error: {str(e)}"
+            return self._hf_generate(prompt, max_new_tokens=120, temperature=0.9)
 
 # Initialize AI helper
 health_ai = HealthAI()
