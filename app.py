@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import os
+from typing import Optional
 
 # Page configuration
 st.set_page_config(
@@ -241,19 +242,176 @@ st.markdown("""
         -webkit-appearance: none;
         margin: 0;
     }
+    
+    /* Mobile-specific optimizations */
+    @media (max-width: 768px) {
+        /* Stack columns on mobile */
+        .stColumn {
+            width: 100% !important;
+            margin-bottom: 1rem;
+        }
+        
+        /* Mobile-friendly text sizes */
+        h1 { font-size: 1.5rem !important; }
+        h2 { font-size: 1.25rem !important; }
+        h3 { font-size: 1.1rem !important; }
+        
+        /* Mobile-friendly spacing */
+        .element-container {
+            margin-bottom: 1rem;
+        }
+        
+        /* Mobile-friendly charts */
+        .plotly-graph-div {
+            height: 300px !important;
+        }
+        
+        /* Mobile-friendly dataframes */
+        .dataframe {
+            font-size: 12px;
+        }
+        
+        /* Mobile-friendly buttons */
+        .stButton > button {
+            font-size: 14px;
+            height: 44px;
+        }
+        
+        /* Mobile-friendly inputs */
+        .stNumberInput > div > div > input,
+        .stTextInput > div > div > input,
+        .stSelectbox > div > div > select {
+            font-size: 16px; /* Prevents zoom on iOS */
+            height: 44px;
+        }
+        
+        /* Mobile-friendly tabs */
+        .stTabs [data-baseweb="tab"] {
+            font-size: 11px;
+            padding: 6px 8px;
+            height: 44px;
+            min-width: 60px;
+        }
+        
+        /* Mobile-friendly metrics */
+        .metric-container {
+            padding: 12px;
+            margin: 6px 0;
+        }
+        
+        .metric-value {
+            font-size: 20px;
+        }
+        
+        .metric-label {
+            font-size: 12px;
+        }
+    }
+    
+    /* Touch-friendly interactions */
+    .stButton > button:active {
+        transform: translateY(1px);
+    }
+    
+    .stTabs [data-baseweb="tab"]:active {
+        transform: translateY(1px);
+    }
+    
+    /* Mobile-friendly scrollbars */
+    ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+    
+    ::-webkit-scrollbar-track {
+        background: #f1f1f1;
+        border-radius: 3px;
+    }
+    
+    ::-webkit-scrollbar-thumb {
+        background: #c1c1c1;
+        border-radius: 3px;
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+        background: #a8a8a8;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Data storage functions
+# Enhanced data storage functions with session state backup
 def load_data(filename):
-    """Load data from CSV file"""
+    """Load data from CSV file with session state backup"""
+    # First try to load from session state (persists during session)
+    session_key = f"data_{filename.replace('.csv', '')}"
+    if session_key in st.session_state:
+        return st.session_state[session_key]
+    
+    # Fallback to CSV file
     if os.path.exists(filename):
-        return pd.read_csv(filename)
+        data = pd.read_csv(filename)
+        # Store in session state for persistence
+        st.session_state[session_key] = data
+        return data
     return pd.DataFrame()
 
 def save_data(data, filename):
-    """Save data to CSV file"""
+    """Save data to both CSV file and session state"""
+    # Save to CSV file
     data.to_csv(filename, index=False)
+    
+    # Also save to session state for persistence
+    session_key = f"data_{filename.replace('.csv', '')}"
+    st.session_state[session_key] = data
+
+def export_data():
+    """Export all data as downloadable files"""
+    data_files = {
+        'user_profile.csv': load_data('user_profile.csv'),
+        'weight_log.csv': load_data('weight_log.csv'),
+        'diet_log.csv': load_data('diet_log.csv'),
+        'workout_log.csv': load_data('workout_log.csv')
+    }
+    
+    # Create a zip file with all data
+    import zipfile
+    import io
+    
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for filename, data in data_files.items():
+            if not data.empty:
+                csv_data = data.to_csv(index=False)
+                zip_file.writestr(filename, csv_data)
+    
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue()
+
+def import_data(uploaded_file):
+    """Import data from uploaded file"""
+    try:
+        import zipfile
+        import io
+        
+        # Read the uploaded file
+        file_content = uploaded_file.read()
+        
+        # Extract CSV files from zip
+        with zipfile.ZipFile(io.BytesIO(file_content), 'r') as zip_file:
+            for filename in zip_file.namelist():
+                if filename.endswith('.csv'):
+                    csv_data = zip_file.read(filename).decode('utf-8')
+                    data = pd.read_csv(io.StringIO(csv_data))
+                    
+                    # Save to session state and CSV
+                    session_key = f"data_{filename.replace('.csv', '')}"
+                    st.session_state[session_key] = data
+                    data.to_csv(filename, index=False)
+        
+        return True
+    except Exception as e:
+        st.error(f"Error importing data: {str(e)}")
+        return False
 
 def init_data_files():
     """Initialize data files if they don't exist"""
@@ -271,11 +429,60 @@ def init_data_files():
 # Initialize data files
 init_data_files()
 
+# Supabase integration
+supabase_client: Optional[object] = None
+try:
+    from supabase_client import get_supabase_client, fetch_all, upsert_rows
+    supabase_client = get_supabase_client()
+except Exception:
+    supabase_client = None
+
+# AI integration
+try:
+    from ai_helper import health_ai
+    ai_available = True
+except Exception:
+    ai_available = False
+
 # Load data
 user_profile = load_data('user_profile.csv')
 weight_log = load_data('weight_log.csv')
 diet_log = load_data('diet_log.csv')
 workout_log = load_data('workout_log.csv')
+
+# If Supabase configured, load initial data from Supabase
+if supabase_client:
+    try:
+        import pandas as _pd
+        sp_user = fetch_all(supabase_client, 'user_profile')
+        if sp_user:
+            user_profile = _pd.DataFrame(sp_user)
+            save_data(user_profile, 'user_profile.csv')
+            # Supabase sync
+            if supabase_client is not None:
+                try:
+                    upsert_rows(supabase_client, 'user_profile', user_profile.to_dict(orient='records'))
+                except Exception:
+                    pass
+        sp_weight = fetch_all(supabase_client, 'weight_log')
+        if sp_weight:
+            weight_log = _pd.DataFrame(sp_weight)
+            save_data(weight_log, 'weight_log.csv')
+            if supabase_client is not None:
+                try:
+                    upsert_rows(supabase_client, 'weight_log', weight_log.to_dict(orient='records'))
+                except Exception:
+                    pass
+        sp_diet = fetch_all(supabase_client, 'diet_log')
+        if sp_diet:
+            diet_log = _pd.DataFrame(sp_diet)
+            save_data(diet_log, 'diet_log.csv')
+        sp_workout = fetch_all(supabase_client, 'workout_log')
+        if sp_workout:
+            workout_log = _pd.DataFrame(sp_workout)
+            save_data(workout_log, 'workout_log.csv')
+    except Exception:
+        pass
 
 # Helper functions
 def calculate_bmi(weight, height):
@@ -352,10 +559,32 @@ def get_vegetarian_food_recommendations():
 
 # Main app
 def main():
-    st.title("💪 Personal Health Manager")
-    st.markdown("Track your health journey with diet, exercise, and progress monitoring")
+    # Mobile detection and optimization
+    st.markdown("""
+    <script>
+    // Mobile detection and optimization
+    function detectMobile() {
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        if (isMobile) {
+            document.body.classList.add('mobile-device');
+            // Optimize for mobile
+            document.querySelector('.main').style.padding = '0.5rem';
+        }
+    }
+    detectMobile();
+    </script>
+    """, unsafe_allow_html=True)
     
-    # Create tabs
+    # Mobile-optimized header
+    st.markdown("""
+    <div style="text-align: center; padding: 1rem 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                border-radius: 12px; margin-bottom: 1rem; color: white; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+        <h1 style="margin: 0; font-size: 2rem; font-weight: bold;">💪 Personal Health Manager</h1>
+        <p style="margin: 0.5rem 0 0 0; font-size: 1rem; opacity: 0.9;">Track your health journey with diet, exercise, and progress monitoring</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Create mobile-friendly tabs
     tab1, tab2, tab3, tab4 = st.tabs(["👤 Profile", "🍽️ Diet", "🏃 Workout", "📊 Dashboard"])
     
     with tab1:
@@ -377,7 +606,11 @@ def profile_tab():
     current_user_profile = load_data('user_profile.csv')
     current_weight_log = load_data('weight_log.csv')
     
+    # Mobile-responsive columns
     col1, col2 = st.columns([1, 1])
+    
+    # Add mobile detection
+    is_mobile = st.session_state.get('is_mobile', False)
     
     with col1:
         st.subheader("Personal Information")
@@ -443,15 +676,41 @@ def profile_tab():
                               current_profile['age'], current_profile['gender'])
             tdee = calculate_tdee(bmr, current_profile['activity_level'])
             
-            # Display metrics
-            col2_1, col2_2 = st.columns(2)
-            with col2_1:
-                st.metric("BMI", f"{bmi}", f"{bmi_category}")
-                st.metric("Ideal Weight Range", f"{ideal_range[0]} - {ideal_range[1]} kg")
+            # Display metrics with mobile-friendly design
+            st.markdown("### 📊 Health Metrics")
             
-            with col2_2:
-                st.metric("BMR", f"{int(bmr)} cal/day")
-                st.metric("TDEE", f"{int(tdee)} cal/day")
+            # Create mobile-friendly metric cards
+            metric_col1, metric_col2 = st.columns(2)
+            
+            with metric_col1:
+                st.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-value">{bmi}</div>
+                    <div class="metric-label">BMI - {bmi_category}</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                st.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-value">{ideal_range[0]}-{ideal_range[1]} kg</div>
+                    <div class="metric-label">Ideal Weight Range</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with metric_col2:
+                st.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-value">{int(bmr)}</div>
+                    <div class="metric-label">BMR (cal/day)</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                st.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-value">{int(tdee)}</div>
+                    <div class="metric-label">TDEE (cal/day)</div>
+                </div>
+                """, unsafe_allow_html=True)
             
             # Weight progress chart
             if len(current_weight_log) > 1:
@@ -481,6 +740,7 @@ def diet_tab():
     else:
         tdee = 2000  # Default value
     
+    # Mobile-responsive layout
     col1, col2 = st.columns([1, 1])
     
     with col1:
@@ -528,6 +788,11 @@ def diet_tab():
             
             current_diet_log = pd.concat([current_diet_log, new_meal], ignore_index=True)
             save_data(current_diet_log, 'diet_log.csv')
+            if supabase_client is not None:
+                try:
+                    upsert_rows(supabase_client, 'diet_log', current_diet_log.to_dict(orient='records'))
+                except Exception:
+                    pass
             st.success("Meal logged successfully!")
             st.rerun()
     
@@ -543,19 +808,57 @@ def diet_tab():
             total_carbs = today_meals['carbs'].sum()
             total_fat = today_meals['fat'].sum()
             
-            col2_1, col2_2 = st.columns(2)
-            with col2_1:
-                st.metric("Total Calories", f"{int(total_calories)}", f"Target: {int(tdee)}")
-                st.metric("Protein", f"{total_protein:.1f}g")
+            # Mobile-friendly metrics display
+            st.markdown("### 📊 Today's Summary")
             
-            with col2_2:
-                st.metric("Carbs", f"{total_carbs:.1f}g")
-                st.metric("Fat", f"{total_fat:.1f}g")
-            
-            # Calorie progress bar
+            # Calorie progress with visual indicator
             calorie_progress = min(total_calories / tdee, 1.0)
-            st.progress(calorie_progress)
-            st.caption(f"Calorie Goal Progress: {calorie_progress:.1%}")
+            progress_color = "green" if calorie_progress >= 0.8 and calorie_progress <= 1.2 else "orange" if calorie_progress < 0.8 else "red"
+            
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                        border-radius: 12px; padding: 1rem; margin: 1rem 0; color: white; text-align: center;">
+                <div style="font-size: 2rem; font-weight: bold; margin-bottom: 0.5rem;">
+                    {int(total_calories)} / {int(tdee)} cal
+                </div>
+                <div style="font-size: 1rem; opacity: 0.9;">Daily Calorie Goal</div>
+                <div style="margin-top: 1rem;">
+                    <div style="background: rgba(255,255,255,0.2); border-radius: 10px; height: 12px; overflow: hidden;">
+                        <div style="background: {progress_color}; height: 100%; width: {calorie_progress*100}%; 
+                                    transition: width 0.3s ease;"></div>
+                    </div>
+                    <div style="margin-top: 0.5rem; font-size: 0.9rem;">
+                        {calorie_progress:.1%} Complete
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Macro nutrients in mobile-friendly cards
+            macro_col1, macro_col2 = st.columns(2)
+            
+            with macro_col1:
+                st.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-value">{total_protein:.1f}g</div>
+                    <div class="metric-label">Protein</div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                st.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-value">{total_carbs:.1f}g</div>
+                    <div class="metric-label">Carbs</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with macro_col2:
+                st.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-value">{total_fat:.1f}g</div>
+                    <div class="metric-label">Fat</div>
+                </div>
+                """, unsafe_allow_html=True)
             
             # Meal breakdown
             st.subheader("Meal Breakdown")
@@ -584,6 +887,7 @@ def workout_tab():
     # Load current data
     current_workout_log = load_data('workout_log.csv')
     
+    # Mobile-responsive layout
     col1, col2 = st.columns([1, 1])
     
     with col1:
@@ -615,6 +919,11 @@ def workout_tab():
             
             current_workout_log = pd.concat([current_workout_log, new_workout], ignore_index=True)
             save_data(current_workout_log, 'workout_log.csv')
+            if supabase_client is not None:
+                try:
+                    upsert_rows(supabase_client, 'workout_log', current_workout_log.to_dict(orient='records'))
+                except Exception:
+                    pass
             st.success("Workout logged successfully!")
             st.rerun()
     
@@ -628,12 +937,30 @@ def workout_tab():
             total_duration = today_workouts['duration_minutes'].sum()
             total_calories = today_workouts['calories_burned'].sum()
             
-            col2_1, col2_2 = st.columns(2)
-            with col2_1:
-                st.metric("Total Duration", f"{total_duration} min")
-            with col2_2:
-                st.metric("Calories Burned", f"{total_calories}")
+            # Mobile-friendly workout summary
+            st.markdown("### 📊 Today's Workouts")
             
+            # Workout metrics in mobile-friendly cards
+            workout_col1, workout_col2 = st.columns(2)
+            
+            with workout_col1:
+                st.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-value">{total_duration}</div>
+                    <div class="metric-label">Minutes</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with workout_col2:
+                st.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-value">{total_calories}</div>
+                    <div class="metric-label">Calories Burned</div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Workout breakdown
+            st.markdown("### 🏃‍♂️ Workout Details")
             st.dataframe(today_workouts[['exercise_name', 'duration_minutes', 'calories_burned']], 
                         use_container_width=True)
         else:
@@ -685,24 +1012,52 @@ def dashboard_tab():
     today_meals = current_diet_log[current_diet_log['date'] == today] if not current_diet_log.empty else pd.DataFrame()
     today_workouts = current_workout_log[current_workout_log['date'] == today] if not current_workout_log.empty else pd.DataFrame()
     
-    # Summary cards
-    col1, col2, col3, col4 = st.columns(4)
+    # Mobile-friendly summary cards
+    calories_consumed = today_meals['calories'].sum() if not today_meals.empty else 0
+    calories_burned = today_workouts['calories_burned'].sum() if not today_workouts.empty else 0
+    net_calories = calories_consumed - calories_burned
+    workout_time = today_workouts['duration_minutes'].sum() if not today_workouts.empty else 0
     
-    with col1:
-        calories_consumed = today_meals['calories'].sum() if not today_meals.empty else 0
-        st.metric("Calories Consumed", f"{int(calories_consumed)}", f"Target: {int(tdee)}")
+    # Create mobile-friendly dashboard cards
+    st.markdown("### 📊 Today's Overview")
     
-    with col2:
-        calories_burned = today_workouts['calories_burned'].sum() if not today_workouts.empty else 0
-        st.metric("Calories Burned", f"{int(calories_burned)}")
+    # Main metrics in a 2x2 grid for mobile
+    metric_row1_col1, metric_row1_col2 = st.columns(2)
+    metric_row2_col1, metric_row2_col2 = st.columns(2)
     
-    with col3:
-        net_calories = calories_consumed - calories_burned
-        st.metric("Net Calories", f"{int(net_calories)}")
+    with metric_row1_col1:
+        st.markdown(f"""
+        <div class="metric-container">
+            <div class="metric-value">{int(calories_consumed)}</div>
+            <div class="metric-label">Calories Consumed</div>
+            <div style="font-size: 0.8rem; opacity: 0.7; margin-top: 0.25rem;">Target: {int(tdee)}</div>
+        </div>
+        """, unsafe_allow_html=True)
     
-    with col4:
-        workout_time = today_workouts['duration_minutes'].sum() if not today_workouts.empty else 0
-        st.metric("Workout Time", f"{workout_time} min")
+    with metric_row1_col2:
+        st.markdown(f"""
+        <div class="metric-container">
+            <div class="metric-value">{int(calories_burned)}</div>
+            <div class="metric-label">Calories Burned</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with metric_row2_col1:
+        net_color = "green" if net_calories <= 0 else "orange" if net_calories <= 200 else "red"
+        st.markdown(f"""
+        <div class="metric-container">
+            <div class="metric-value" style="color: {net_color};">{int(net_calories)}</div>
+            <div class="metric-label">Net Calories</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with metric_row2_col2:
+        st.markdown(f"""
+        <div class="metric-container">
+            <div class="metric-value">{workout_time}</div>
+            <div class="metric-label">Workout Time (min)</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     # Progress tracking
     st.subheader("Progress Tracking")
@@ -763,7 +1118,113 @@ def dashboard_tab():
         else:
             st.info("Log diet and workout data to see calorie balance")
     
-    # Recommendations
+    # Data Management Section
+    st.subheader("💾 Data Management")
+    
+    col_data1, col_data2 = st.columns(2)
+    
+    with col_data1:
+        st.markdown("**Export Your Data**")
+        st.markdown("Download all your health data as a backup file.")
+        
+        if st.button("📥 Export Data", type="secondary"):
+            zip_data = export_data()
+            st.download_button(
+                label="Download Health Data",
+                data=zip_data,
+                file_name=f"health_data_{datetime.now().strftime('%Y%m%d')}.zip",
+                mime="application/zip"
+            )
+            st.success("Data exported successfully!")
+    
+    with col_data2:
+        st.markdown("**Import Your Data**")
+        st.markdown("Upload a previously exported data file.")
+        
+        uploaded_file = st.file_uploader("Choose a ZIP file", type="zip", key="data_import")
+        if uploaded_file is not None:
+            if st.button("📤 Import Data", type="secondary"):
+                if import_data(uploaded_file):
+                    st.success("Data imported successfully!")
+                    st.rerun()
+                else:
+                    st.error("Failed to import data. Please check the file format.")
+    
+    st.markdown("---")
+    
+    # AI-Powered Recommendations
+    st.subheader("🤖 AI Health Assistant")
+    
+    if ai_available:
+        # AI Health Insights
+        if st.button("🧠 Get AI Health Insights", type="primary"):
+            with st.spinner("AI is analyzing your health data..."):
+                user_data = {
+                    'weight': current_profile['weight'],
+                    'height': current_profile['height'],
+                    'age': current_profile['age'],
+                    'gender': current_profile['gender'],
+                    'activity_level': current_profile['activity_level'],
+                    'bmi': bmi,
+                    'daily_calories': calories_consumed,
+                    'workout_time': workout_time
+                }
+                
+                ai_insights = health_ai.get_health_insights(user_data)
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                            border-radius: 12px; padding: 1rem; color: white; margin: 1rem 0;">
+                    <h4 style="margin: 0 0 0.5rem 0;">🤖 AI Health Analysis</h4>
+                    <p style="margin: 0; font-size: 0.9rem;">{ai_insights}</p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # AI Meal Recommendations
+        if st.button("🍽️ Get AI Meal Suggestions", type="secondary"):
+            with st.spinner("AI is suggesting meals..."):
+                meal_suggestions = health_ai.get_meal_recommendations(current_profile, "healthy meal")
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #ff6b6b 0%, #ffa500 100%); 
+                            border-radius: 12px; padding: 1rem; color: white; margin: 1rem 0;">
+                    <h4 style="margin: 0 0 0.5rem 0;">🍽️ AI Meal Recommendations</h4>
+                    <p style="margin: 0; font-size: 0.9rem;">{meal_suggestions}</p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # AI Workout Suggestions
+        if st.button("🏃 Get AI Workout Plan", type="secondary"):
+            with st.spinner("AI is creating a workout plan..."):
+                workout_suggestions = health_ai.get_workout_suggestions(current_profile, 30)
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #4ecdc4 0%, #44a08d 100%); 
+                            border-radius: 12px; padding: 1rem; color: white; margin: 1rem 0;">
+                    <h4 style="margin: 0 0 0.5rem 0;">🏃 AI Workout Suggestions</h4>
+                    <p style="margin: 0; font-size: 0.9rem;">{workout_suggestions}</p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # AI Progress Analysis
+        if len(weight_log) > 1 or len(diet_log) > 0 or len(workout_log) > 0:
+            if st.button("📊 Get AI Progress Analysis", type="secondary"):
+                with st.spinner("AI is analyzing your progress..."):
+                    weight_data = weight_log.to_dict('records') if not weight_log.empty else []
+                    diet_data = diet_log.to_dict('records') if not diet_log.empty else []
+                    workout_data = workout_log.to_dict('records') if not workout_log.empty else []
+                    
+                    progress_analysis = health_ai.analyze_progress(weight_data, diet_data, workout_data)
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                                border-radius: 12px; padding: 1rem; color: white; margin: 1rem 0;">
+                        <h4 style="margin: 0 0 0.5rem 0;">📊 AI Progress Analysis</h4>
+                        <p style="margin: 0; font-size: 0.9rem;">{progress_analysis}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+    else:
+        st.info("🤖 AI features not available. Configure Hugging Face token to enable AI assistance.")
+    
+    st.markdown("---")
+    
+    # Traditional Recommendations
     st.subheader("💡 Personalized Recommendations")
     
     # Calorie recommendations
